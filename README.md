@@ -2,6 +2,9 @@
 
 Retrieval-augmented context compaction for long-running agents.
 
+> **Inspired by** [@DSantra92 — "On Lossless Context Compaction"](https://x.com/dsantra92/status/2067766139011350942) (Jun 2026)  
+> This repo is an implementation + empirical evaluation of that idea.
+
 ## The Problem
 
 Context compaction (summarizing a conversation to fit in window) is a lossy operation. The compacted state drops *binding state* — user preferences, rejected approaches, active constraints, and the rationale behind decisions. These look unimportant until they suddenly matter, at which point the agent either asks the user to repeat themselves or silently violates a prior commitment.
@@ -70,12 +73,26 @@ eval/
   resolution_bench/   # resolution question benchmark dataset
 ```
 
+## Eval Results
+
+See [`EVAL_REPORT.md`](EVAL_REPORT.md) for full details. Summary:
+
+| Metric | Score |
+|--------|-------|
+| BSRR (binding state recovery rate) | **100%** |
+| Resolution benchmark (20 cases, 5 categories) | **100%** |
+| Alignment drift score (5 cycles, 100 noise turns) | **0.20** (first failure at cycle 5) |
+| Adversarial prose burial (facts hidden in paragraphs) | **100%** |
+| Seed prompt extraction (lossy layer) | **80%** (classifier phrase gap) |
+
 ## Status
 
-Early scaffolding. Minimal viable version:
+Working. Shipped:
 - Conversation indexer (JSONL per turn)
-- Grep-based retriever exposed as a tool call
-- Compactor that writes structured state (objective / plan / constraints / decisions)
-- BSRR eval harness
+- Keyword-overlap retriever exposed as tool call + CLI
+- Compactor that extracts constraints / rejections / preferences into a seed prompt
+- BSRR eval harness, alignment drift evaluator, 20-case resolution benchmark
+- MCP server (raw JSON-RPC stdio, Python 3.9+) wired into Claude Code
+- Pi.ai skills: `/lc-index`, `/lc-query`, `/lc-compact`
 
-No semantic retrieval yet — start with exact match, grow from there.
+No semantic retrieval yet — keyword scoring is sufficient for well-formed binding statements; embeddings would help for paraphrased preferences.
