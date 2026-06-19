@@ -7,7 +7,6 @@ Lower drift score is better (0.0 = perfect retention, 1.0 = total loss).
 """
 import json
 import tempfile
-import time
 from pathlib import Path
 from typing import Any
 
@@ -221,8 +220,6 @@ class DriftEvaluator:
             # -- Add noise turns ------------------------------------------
             noise = _make_noise_turns(self.turns_per_cycle)
             for role, content in noise:
-                # small sleep so turn_ids (ms-timestamp) stay monotonic
-                time.sleep(0.002)
                 self._indexer.append(role, content)
 
             # -- Compact --------------------------------------------------
@@ -266,9 +263,7 @@ class DriftEvaluator:
     def _inject_preferences(self) -> None:
         """Append the 5 known preference statements into the index."""
         for pref in KNOWN_PREFERENCES:
-            time.sleep(0.002)
             self._indexer.append("user", pref["statement"], metadata={"binding": True})
-            time.sleep(0.002)
             self._indexer.append("assistant", "Understood, I will respect that preference.")
 
 

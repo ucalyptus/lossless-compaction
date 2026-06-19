@@ -15,6 +15,7 @@ import json
 import os
 import sys
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Optional
 
@@ -32,7 +33,7 @@ _SCHEMA_VERSION = 1
 
 def _index_append(role: str, content: str) -> None:
     record = {"schema_version": _SCHEMA_VERSION,
-              "turn_id": int(time.time() * 1000), "role": role,
+              "turn_id": uuid.uuid4().hex, "role": role,
               "content": content, "ts": time.time()}
     with INDEX_PATH.open("a") as f:
         f.write(json.dumps(record) + "\n")

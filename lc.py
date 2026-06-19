@@ -10,15 +10,43 @@ Usage:
   lc list [--limit N] [--role R]       — print last N turns (default 20)
   lc delete <turn_id>                  — remove a turn by its turn_id, rewrite the file
   lc reset [--yes]                     — clear both index.jsonl and state.json
+
+Project scoping:
+  Index and state live at ~/.lossless-compaction/<project>/ where <project> is
+  auto-detected from the git repository root directory name.
+  Override with LC_PROJECT=<name> to force a specific project name.
+  Outside a git repo the project name defaults to "default".
+  Use LC_DATA_DIR=<path> to override the base directory entirely.
 """
-import json, os, sys, tempfile, time
+import json, os, subprocess, sys, tempfile, time, uuid
 from pathlib import Path
 from typing import Optional
 
+
+def _get_project_name() -> str:
+    """Detect project name from git root dir, or use 'default'."""
+    proj = os.environ.get("LC_PROJECT")
+    if proj:
+        return proj
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=2
+        )
+        if result.returncode == 0:
+            return Path(result.stdout.strip()).name
+    except Exception:
+        pass
+    return "default"
+
+
 BASE = Path(os.environ.get("LC_DATA_DIR", Path.home() / ".lossless-compaction"))
-INDEX = BASE / "index.jsonl"
-STATE = BASE / "state.json"
-BASE.mkdir(parents=True, exist_ok=True)
+# Project scoping: ~/.lossless-compaction/<project>/
+_PROJECT = _get_project_name()
+_PROJECT_DIR = BASE / _PROJECT
+_PROJECT_DIR.mkdir(parents=True, exist_ok=True)
+INDEX = _PROJECT_DIR / "index.jsonl"
+STATE = _PROJECT_DIR / "state.json"
 
 _VALID_ROLES = {"user", "assistant", "system"}
 _SCHEMA_VERSION = 1
@@ -38,9 +66,10 @@ def index_append(role: str, content: str) -> int:
     _validate_turn(role, content)
     with INDEX.open("a") as f:
         f.write(json.dumps({"schema_version": _SCHEMA_VERSION,
-                            "turn_id": int(time.time()*1000), "role": role,
+                            "turn_id": uuid.uuid4().hex, "role": role,
                             "content": content, "ts": time.time()}) + "\n")
-    return sum(1 for _ in INDEX.read_text().splitlines() if _.strip())
+    with INDEX.open() as f:
+        return sum(1 for line in f if line.strip())
 
 def index_load() -> list[dict]:
     if not INDEX.exists(): return []
@@ -95,18 +124,28 @@ _STOP_WORDS = {
 }
 
 def retrieve(question: str, top_k: int = 5) -> list[dict]:
+    if not INDEX.exists():
+        return []
     raw_kw = set(question.lower().split())
     keywords = raw_kw - _STOP_WORDS
     if not keywords:
         keywords = raw_kw  # fallback: use all tokens if everything is a stop word
     scored = []
-    for turn in index_load():
-        score = sum(1 for kw in keywords if kw in turn["content"].lower())
-        if score > 0:
-            # ponytail: user turns get a small boost — binding facts come from users
-            if turn.get("role") == "user":
-                score += 0.1
-            scored.append((score, turn))
+    with INDEX.open() as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                turn = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            score = sum(1 for kw in keywords if kw in turn["content"].lower())
+            if score > 0:
+                # ponytail: user turns get a small boost — binding facts come from users
+                if turn.get("role") == "user":
+                    score += 0.1
+                scored.append((score, turn))
     scored.sort(key=lambda x: -x[0])
     return [t for _, t in scored[:top_k]]
 
