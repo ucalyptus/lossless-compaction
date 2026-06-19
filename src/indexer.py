@@ -5,6 +5,7 @@ Each turn: {schema_version, turn_id, role, content, ts, metadata}.
 import json
 import sys
 import time
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -36,7 +37,7 @@ class ConversationIndexer:
         _validate_turn(role, content)
         record = {
             "schema_version": _SCHEMA_VERSION,
-            "turn_id": int(time.time() * 1000),
+            "turn_id": uuid.uuid4().hex,
             "role": role,
             "content": content,
             "ts": time.time(),
