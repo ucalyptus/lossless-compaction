@@ -44,6 +44,35 @@ except ModuleNotFoundError:
 TOP_K = 3
 
 # ---------------------------------------------------------------------------
+# Noise corpus — 20 background turns indexed alongside each fact.
+# Without noise, even a random retriever scores 100 % because the index
+# contains only the fact being queried.
+# ---------------------------------------------------------------------------
+
+NOISE_TURNS = [
+    ("assistant", "The migration is 60% complete. Next step is schema validation."),
+    ("user", "Can you run the test suite and summarise failures?"),
+    ("assistant", "All 42 tests passed. Coverage at 87%."),
+    ("user", "Update the changelog for this sprint."),
+    ("assistant", "Changelog updated with 3 new entries."),
+    ("user", "How should we handle the retry logic for this endpoint?"),
+    ("assistant", "Exponential back-off with jitter, cap at 5 attempts."),
+    ("user", "Check the CI pipeline logs."),
+    ("assistant", "Pipeline green. Last run: 2 min 14 sec."),
+    ("user", "Should we bump the minor version before shipping?"),
+    ("assistant", "Yes — feature-complete, no breaking changes."),
+    ("user", "What is left before we can ship?"),
+    ("assistant", "Docs and one integration test. Both in progress."),
+    ("user", "Confirm the load-test baseline numbers."),
+    ("assistant", "p50 = 12ms, p99 = 48ms at 1000 RPS."),
+    ("user", "Is the feature flag cleanup done?"),
+    ("assistant", "Three flags removed. One still active pending QA."),
+    ("user", "Summarise today's standout decisions."),
+    ("assistant", "Deferred caching, locked schema version, approved rollout."),
+    ("user", "Let us proceed with the deployment plan as discussed."),
+]
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -62,19 +91,23 @@ def load_dataset(path: Path) -> list[dict]:
 
 
 def index_record(record: dict, index_path: Path) -> None:
-    """Write the injected_text as a single 'user' turn into a fresh index."""
+    """Write the injected_text plus 20 noise turns into a fresh index."""
     # Remove any stale index so each record gets a clean slate.
     if index_path.exists():
         index_path.unlink()
     indexer = ConversationIndexer(str(index_path))
+    # Inject the binding fact first
     indexer.append("user", record["injected_text"])
+    # Add noise turns
+    for role, content in NOISE_TURNS:
+        indexer.append(role, content)
 
 
 def evaluate_record(record: dict, index_path: Path) -> dict:
     """
     Returns a result dict with keys:
         id, category, probe, hit (bool), matched_keyword (str|None),
-        top_results (list[str])
+        paraphrase_hit (bool|None), top_results (list[str])
     """
     retriever = ConversationRetriever(str(index_path))
     hits = retriever.query(record["probe"], top_k=TOP_K)
@@ -86,12 +119,21 @@ def evaluate_record(record: dict, index_path: Path) -> dict:
             matched_kw = kw
             break
 
+    # Paraphrase probe — harder, different vocabulary from injected text.
+    paraphrase_hit = None
+    if "paraphrase_probe" in record:
+        para_hits = retriever.query(record["paraphrase_probe"], top_k=TOP_K)
+        para_text = " ".join(h["content"].lower() for h in para_hits)
+        para_kw = next((kw for kw in record["expected_keywords"] if kw.lower() in para_text), None)
+        paraphrase_hit = para_kw is not None
+
     return {
         "id": record["id"],
         "category": record["category"],
         "probe": record["probe"],
         "hit": matched_kw is not None,
         "matched_keyword": matched_kw,
+        "paraphrase_hit": paraphrase_hit,
         "top_results": [h["content"][:120] for h in hits],
     }
 
@@ -101,16 +143,18 @@ def evaluate_record(record: dict, index_path: Path) -> dict:
 # ---------------------------------------------------------------------------
 
 def print_results(results: list[dict]) -> None:
+    print(f"\nLoaded {len(results)} records — each indexed with {len(NOISE_TURNS)} noise turns")
+
     # Per-record detail
     print("\n=== Per-record results ===")
-    col_w = 8
-    print(f"{'ID':<8} {'CAT':<12} {'HIT':<5} {'KEYWORD':<20} PROBE")
-    print("-" * 80)
+    print(f"{'ID':<8} {'CAT':<12} {'HIT':<5} {'PARA':<5} {'KEYWORD':<20} PROBE")
+    print("-" * 90)
     for r in results:
-        hit_sym = "PASS" if r["hit"] else "FAIL"
-        kw      = r["matched_keyword"] or "-"
-        probe   = r["probe"][:50]
-        print(f"{r['id']:<8} {r['category']:<12} {hit_sym:<5} {kw:<20} {probe}")
+        hit_sym  = "PASS" if r["hit"] else "FAIL"
+        para_sym = ("PASS" if r["paraphrase_hit"] else "FAIL") if r["paraphrase_hit"] is not None else "-"
+        kw       = r["matched_keyword"] or "-"
+        probe    = r["probe"][:50]
+        print(f"{r['id']:<8} {r['category']:<12} {hit_sym:<5} {para_sym:<5} {kw:<20} {probe}")
 
     # Per-category precision
     print("\n=== Precision by category ===")
@@ -125,11 +169,21 @@ def print_results(results: list[dict]) -> None:
         bar   = "#" * hits + "." * (total - hits)
         print(f"  {cat:<16} {hits}/{total}  [{bar}]  {pct:.0f}%")
 
-    # Overall
+    # Overall — original probes
     total_hits  = sum(r["hit"] for r in results)
     total_all   = len(results)
     overall_pct = total_hits / total_all * 100 if total_all else 0.0
-    print(f"\n=== Overall precision: {total_hits}/{total_all}  ({overall_pct:.1f}%) ===\n")
+    print(f"\n=== Overall precision (original probes): {total_hits}/{total_all}  ({overall_pct:.1f}%) ===")
+
+    # Paraphrase precision — records that have a paraphrase_probe
+    para_results = [r for r in results if r["paraphrase_hit"] is not None]
+    if para_results:
+        para_hits = sum(r["paraphrase_hit"] for r in para_results)
+        para_total = len(para_results)
+        para_pct = para_hits / para_total * 100
+        print(f"=== Paraphrase precision (harder probes): {para_hits}/{para_total}  ({para_pct:.1f}%) ===\n")
+    else:
+        print("=== Paraphrase precision: n/a (no paraphrase_probe fields in dataset) ===\n")
 
 
 # ---------------------------------------------------------------------------
