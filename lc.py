@@ -184,7 +184,7 @@ def load_state() -> dict:
 
 def save_state(s: dict):
     data = json.dumps(s, indent=2)
-    fd, tmp = tempfile.mkstemp(dir=BASE, suffix=".tmp")
+    fd, tmp = tempfile.mkstemp(dir=_PROJECT_DIR, suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as f:
             f.write(data)
@@ -274,6 +274,7 @@ def main():
         roles = {}
         for t in turns: roles[t["role"]] = roles.get(t["role"], 0) + 1
         s = load_state()
+        print(f"project:  {_PROJECT}")
         print(f"index:    {len(turns)} turns  ({', '.join(f'{k}:{v}' for k,v in roles.items())})")
         print(f"index at: {INDEX}")
         print(f"rejected: {len(s['rejected_approaches'])}")
