@@ -102,9 +102,18 @@ def _compact(objective: str = "") -> str:
     seen_c = {x.lower().strip() for x in state["constraints"]}
     seen_p = {x.lower().strip() for x in state["active_preferences"]}
     for turn in turns:
+        # ponytail: only user turns set binding constraints/preferences
+        if turn.get("role") != "user":
+            continue
         for raw in turn["content"].splitlines():
             line = raw.strip()
             if not line:
+                continue
+            # skip very short lines — likely code or incidental mentions
+            if len(line) < 25:
+                continue
+            # skip obvious code/shell output lines
+            if line.startswith(("#", "$", ">", "```")) or "://" in line:
                 continue
             bucket = _classify(line)
             key = line.lower()
