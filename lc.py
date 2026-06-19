@@ -2,11 +2,14 @@
 """
 lc — Lossless Compaction CLI
 Usage:
-  lc index <role> <content>   — record a turn (role: user|assistant)
-  lc query <question>         — resolve a resolution question from history
-  lc compact [objective]      — scan history, extract binding facts, print seed prompt
-  lc state                    — print current compacted state
-  lc stats                    — print index stats
+  lc index <role> <content>            — record a turn (role: user|assistant)
+  lc query <question>                  — resolve a resolution question from history
+  lc compact [objective]               — scan history, extract binding facts, print seed prompt
+  lc state                             — print current compacted state
+  lc stats                             — print index stats
+  lc list [--limit N] [--role R]       — print last N turns (default 20)
+  lc delete <turn_id>                  — remove a turn by its turn_id, rewrite the file
+  lc reset [--yes]                     — clear both index.jsonl and state.json
 """
 import json, os, sys, time
 from pathlib import Path
@@ -27,6 +30,36 @@ def index_append(role: str, content: str) -> int:
 def index_load() -> list[dict]:
     if not INDEX.exists(): return []
     return [json.loads(l) for l in INDEX.read_text().splitlines() if l.strip()]
+
+def index_list(limit: int = 20, role: Optional[str] = None) -> list[dict]:
+    turns = index_load()
+    if role:
+        turns = [t for t in turns if t.get("role") == role]
+    return turns[-limit:]
+
+def index_delete(turn_id: str) -> int:
+    """Remove turn(s) matching turn_id. Returns count removed."""
+    turns = index_load()
+    before = len(turns)
+    remaining = [t for t in turns if str(t.get("turn_id")) != str(turn_id)]
+    removed = before - len(remaining)
+    if removed:
+        with INDEX.open("w") as f:
+            for t in remaining:
+                f.write(json.dumps(t) + "\n")
+    return removed
+
+def index_reset(confirm: bool = False) -> None:
+    if not confirm:
+        ans = input("This will delete all indexed turns and compacted state. Type 'yes' to confirm: ")
+        if ans.strip().lower() != "yes":
+            print("Aborted.")
+            return
+    if INDEX.exists():
+        INDEX.unlink()
+    if STATE.exists():
+        STATE.unlink()
+    print("Index and state cleared.")
 
 # ── retriever ──────────────────────────────────────────────────────────────
 def retrieve(question: str, top_k: int = 5) -> list[dict]:
@@ -137,6 +170,39 @@ def main():
         print(f"rejected: {len(s['rejected_approaches'])}")
         print(f"constraints: {len(s['constraints'])}")
         print(f"preferences: {len(s['active_preferences'])}")
+
+    elif cmd == "list":
+        limit = 20
+        role = None
+        i = 0
+        while i < len(rest):
+            if rest[i] == "--limit" and i+1 < len(rest):
+                limit = int(rest[i+1]); i += 2
+            elif rest[i] == "--role" and i+1 < len(rest):
+                role = rest[i+1]; i += 2
+            else:
+                i += 1
+        turns = index_list(limit=limit, role=role)
+        if not turns:
+            print("(no turns indexed)")
+        for t in turns:
+            ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(t.get("ts", 0)))
+            preview = t["content"][:80].replace("\n", " ")
+            print(f"[{t['turn_id']}] [{t['role']}] {ts}  {preview}")
+
+    elif cmd == "delete":
+        if not rest:
+            print("usage: lc delete <turn_id>"); sys.exit(1)
+        turn_id = rest[0]
+        removed = index_delete(turn_id)
+        if removed:
+            print(f"deleted {removed} turn(s) with turn_id={turn_id}")
+        else:
+            print(f"no turn found with turn_id={turn_id}")
+
+    elif cmd == "reset":
+        force = "--yes" in rest
+        index_reset(confirm=force)
 
     else:
         print(f"unknown command: {cmd}\n{__doc__}"); sys.exit(1)
