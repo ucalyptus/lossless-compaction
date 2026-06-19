@@ -2,6 +2,8 @@
 
 Retrieval-augmented context compaction for long-running agents.
 
+> **"Lossless" refers to storage, not activation.** No conversation turn is ever discarded — but the agent must explicitly query the index to recover a fact. If it doesn't know a constraint exists, it won't think to ask. See [What "Lossless" Actually Means](#what-lossless-actually-means) for the full explanation.
+
 > **Inspired by** [@DSantra92 — "On Lossless Context Compaction"](https://x.com/dsantra92/status/2067766139011350942) (Jun 2026)  
 > This repo is an implementation + empirical evaluation of that idea.
 
@@ -15,21 +17,37 @@ The standard solution (better summaries, `/compact [instruction]`) still makes t
 
 Treat compaction as a two-layer system:
 
-1. **Compacted state** — lossy, but intentional. Carries: current objective, active plan/todo, known constraints, active decisions. Small enough to seed a new context window.
-2. **Retrieval layer** — the original conversation is indexed and queryable. When the compacted state is insufficient, the agent issues a resolution query against the history.
+1. **Queryable archive** — the original conversation, indexed and searchable. No turn is ever discarded.
+2. **Seed prompt** — a compact, intentional extraction of binding state: current objective, active plan/todo, known constraints, active decisions. Small enough to seed a new context window.
 
-The compacted state does not pretend to be complete. The original history already exists. The missing piece is the ability to search it.
+The seed prompt does not pretend to be complete. The original history already exists. The missing piece is the ability to search it.
 
 ```
-Continue from compacted state
+Continue from seed prompt
     → Detect possible missing context
-    → Query original history
+    → Query original history (lc query <question>)
     → Resolve the missing detail
-    → Update compacted state
+    → Update seed prompt
     → Continue
 ```
 
 This turns compaction from a one-way compression step into a recoverable loop.
+
+## What "Lossless" Actually Means
+
+The index is lossless — no turn is ever discarded. But **retrieval is not automatic**. After compaction, the agent must call `lc query <question>` to recover a specific fact. If the agent doesn't know a constraint exists, it won't think to ask for it.
+
+This means the system is lossless in storage but not in activation. The seed prompt handles the common cases (extracted constraints, rejections, preferences). The index handles everything else — but only when queried.
+
+**Practical implication:** At the start of a new session seeded from compacted state, consider running a proactive resolution pass:
+
+```bash
+lc query "were any approaches rejected?"
+lc query "what are the active constraints?"
+lc query "what are the user preferences?"
+```
+
+Inject these answers into the context before beginning work.
 
 ## Inspiration
 
@@ -43,7 +61,7 @@ Five dimensions for measuring whether lossless compaction actually works:
 
 | Metric | What it measures | How |
 |--------|-----------------|-----|
-| **Binding State Recovery Rate (BSRR)** | % of injected binding facts recoverable after compaction | Inject N known facts → compact → probe with resolution questions |
+| **Binding State Recovery Rate (BSRR)** | % of injected binding facts recoverable after compaction, *given ground-truth queries* (oracle assumption: the agent knows what to ask) | Inject N known facts → compact → probe with resolution questions |
 | **Redundant Re-ask Rate** | How often agent asks user to repeat pre-compaction info | Count re-asks per session; should trend → 0 with retrieval |
 | **Contradiction Rate** | Agent takes approach explicitly rejected in original history | Binary per decision point |
 | **Alignment Drift (multi-cycle)** | Deviation from original preferences after K compaction cycles | Compare decisions at cycle K vs preferences at cycle 1 |
@@ -79,7 +97,7 @@ See [`EVAL_REPORT.md`](EVAL_REPORT.md) for full details. Summary:
 
 | Metric | Score |
 |--------|-------|
-| BSRR (binding state recovery rate) | **100%** |
+| BSRR (binding state recovery rate, oracle queries) | **100%** |
 | Resolution benchmark (20 cases, 5 categories) | **100%** |
 | Alignment drift score (5 cycles, 100 noise turns) | **0.20** (first failure at cycle 5) |
 | Adversarial prose burial (facts hidden in paragraphs) | **100%** |
