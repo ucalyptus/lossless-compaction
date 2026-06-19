@@ -118,9 +118,18 @@ class AgentLoop:
         seen_preferences: set[str] = {p.lower().strip() for p in preferences}
 
         for turn in turns:
+            # ponytail: only user turns set binding constraints/preferences
+            if turn.get("role") != "user":
+                continue
             for raw_line in turn["content"].splitlines():
                 line = raw_line.strip()
                 if not line:
+                    continue
+                # skip very short lines — likely code or incidental mentions
+                if len(line) < 25:
+                    continue
+                # skip obvious code/shell output lines
+                if line.startswith(("#", "$", ">", "```")) or "://" in line:
                     continue
                 bucket = _classify_line(line)
                 key = line.lower()

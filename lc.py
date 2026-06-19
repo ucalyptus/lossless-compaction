@@ -67,10 +67,19 @@ def compact(objective: str = "") -> str:
     seen_c = {x.lower().strip() for x in s["constraints"]}
     seen_p = {x.lower().strip() for x in s["active_preferences"]}
     for turn in index_load():
+        # ponytail: only user turns set binding constraints/preferences
+        if turn.get("role") != "user":
+            continue
         for raw in turn["content"].splitlines():
             line = raw.strip()
-            if not line: continue
-            b, key = _classify(line), line.lower()
+            # skip very short lines — likely code or incidental mentions
+            if len(line) < 25:
+                continue
+            # skip obvious code/shell output lines
+            lo = line.lower()
+            if line.startswith(("#", "$", ">", "```")) or "://" in line:
+                continue
+            b, key = _classify(line), lo
             if b == "rejected" and key not in seen_r:
                 s["rejected_approaches"].append(line); seen_r.add(key)
             elif b == "constraint" and key not in seen_c:
