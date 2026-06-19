@@ -1,0 +1,163 @@
+version: 1
+meta:
+  name: multi-model-issue-close
+  description: >
+    Fan-out multi-model code review → parallel worktree implement → cross-model PR
+    review → auto-merge or fix loop. Used to close all open issues in a GitHub repo
+    using an implementer-verifier-fixer agent pattern with cross-vendor judges.
+  author: ksimback
+  created: 2026-06-19
+
+goal:
+  statement: >
+    Close all open GitHub issues in a target repository by: (1) reading each open
+    issue, (2) spawning a parallel Claude agent per issue to implement the fix in an
+    isolated git worktree and file a PR, (3) reviewing each PR with a cross-model
+    judge (DeepSeek or GLM-5.2), (4) auto-merging approved PRs, and (5) spawning fix
+    agents for blocked PRs and re-reviewing. The loop ends when all issues are closed
+    or three fix rounds have elapsed.
+  context_sources:
+    - cmd: ["gh", "issue", "list", "--repo", "ksimback/lossless-compaction", "--state", "open", "--json", "number,title,body"]
+      timeout_sec: 30
+    - cmd: ["gh", "pr", "list", "--repo", "ksimback/lossless-compaction", "--state", "open", "--json", "number,title,headRefName,reviewDecision"]
+      timeout_sec: 30
+    - cmd: ["git", "log", "--oneline", "-20"]
+      timeout_sec: 15
+  definition_of_done: >
+    All open GitHub issues are closed (gh issue list returns empty) OR three
+    implement-review-fix rounds have elapsed. Each closed issue has a merged PR.
+    run-log.md records each round's implement/review/merge/fix decisions. state.json
+    shows status: passed.
+  verification:
+    - id: all-issues-closed
+      type: programmatic
+      check: ["bash", "-c", "test -z \"$(gh issue list --repo ksimback/lossless-compaction --state open --json number -q '.[].number')\""]
+      expect: exit_zero
+    - id: pr-quality
+      type: judge
+      rubric: >
+        Each merged PR in this round: (a) references the issue it closes, (b) makes
+        a focused change that directly addresses the issue description, (c) does not
+        introduce new test failures (check for test file changes alongside code
+        changes), and (d) has a coherent commit message. Flag any PR where the change
+        is unrelated to the issue or where core logic was removed rather than fixed.
+    - id: human-final-review
+      type: human
+      prompt: >
+        All PRs have been implemented, reviewed, and merged. Please spot-check 2-3
+        closed issues and their linked PRs to confirm the fixes are sound. Type 'pass'
+        to accept the run, or describe what needs revision.
+
+host:
+  cli: claude
+  model: claude-sonnet-4-6
+  invoke: ["claude", "-p"]
+  timeout_sec: 600
+
+council:
+  - id: deepseek-judge
+    role: judge
+    cli: hermes
+    model: deepseek-v4-pro
+    invoke: ["hermes", "chat", "--provider", "deepseek", "-m", "deepseek-v4-pro", "-q"]
+    timeout_sec: 120
+    scope: [delivery]
+    local: false
+
+  - id: gpt55-reviewer
+    role: reviewer
+    cli: hermes
+    model: gpt-5.5
+    invoke: ["hermes", "chat", "-q"]
+    timeout_sec: 120
+    scope: [plan, delivery]
+    local: false
+
+  - id: glm52-reviewer
+    role: reviewer
+    cli: hermes
+    model: z-ai/glm-5.2
+    invoke: ["hermes", "chat", "--provider", "openrouter", "-m", "z-ai/glm-5.2", "-q"]
+    timeout_sec: 180
+    scope: [delivery]
+    local: false
+
+gates:
+  plan_gate:
+    when: after_plan
+    members: [gpt55-reviewer]
+    verdict_policy: revise_until_clean
+    verdict_source: human
+    criteria: [pr-quality]
+    max_revisions: 2
+
+  delivery_gate:
+    when: after_each_delivery
+    members: [deepseek-judge, gpt55-reviewer, glm52-reviewer]
+    verdict_policy: revise_until_clean
+    verdict_source: deepseek-judge
+    criteria: [all-issues-closed, pr-quality]
+    max_revisions: 3
+
+loop_control:
+  max_iterations: 9  # 3 rounds × up to 3 fix passes each
+  budget:
+    usd: 10.0
+    tokens: 4000000
+    wall_clock_min: 60
+  no_progress:
+    max_stalled_iterations: 2
+    signals:
+      - open issue count unchanged between rounds
+      - same PR blocked by same review note twice
+      - worktree agent exits without producing a commit
+    action: stop
+  human_checkpoints:
+    - after_plan
+  stop_conditions:
+    - all-issues-closed criterion passes (gh issue list empty)
+    - max_iterations reached
+    - no_progress detected for 2 consecutive rounds
+    - any budget cap exceeded
+
+execution:
+  mode: in_session
+  isolation: worktree
+  side_effects:
+    requires_approval: true
+    duplicate_action_check: true
+    side_effect_list:
+      - git push (creates remote branch per issue)
+      - gh pr create (files PR per issue)
+      - gh pr merge (merges approved PRs)
+      - gh pr comment (posts review notes)
+      - gh issue close (closes issue on merge)
+
+observability:
+  state_file: state.json
+  run_log: run-log.md
+  checkpoint_granularity: gate
+
+privacy:
+  egress:
+    - to: deepseek-judge
+      sends: [plan, deliveries, issue-descriptions, code-diffs]
+      redact: [".env", ".env.*", "secrets/**", "**/*.key", "~/.env"]
+      consent: required
+    - to: gpt55-reviewer
+      sends: [plan, deliveries, issue-descriptions]
+      redact: [".env", ".env.*", "secrets/**", "**/*.key", "~/.env"]
+      consent: required
+    - to: glm52-reviewer
+      sends: [deliveries, code-diffs]
+      redact: [".env", ".env.*", "secrets/**", "**/*.key", "~/.env"]
+      consent: required
+
+workspace:
+  dir: ./loop-workspace
+  layout:
+    - plan.md               # issue list + round plan
+    - delivery-{n}.md       # round-N batch summary (which issues, which PRs, which merged)
+    - review-{n}.md         # judge verdicts + reviewer notes for round N
+    - state.json            # current status, iteration, open/closed issue counts
+    - run-log.md            # append-only event log

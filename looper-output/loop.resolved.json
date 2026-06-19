@@ -1,0 +1,363 @@
+{
+  "$schema": "https://github.com/ksimback/looper/schema/loop.resolved.v1.json",
+  "compiled_at": "2026-06-19T22:41:27+00:00",
+  "council": [
+    {
+      "cli": "hermes",
+      "id": "deepseek-judge",
+      "invoke": [
+        "hermes",
+        "chat",
+        "--provider",
+        "deepseek",
+        "-m",
+        "deepseek-v4-pro",
+        "-q"
+      ],
+      "local": false,
+      "model": "deepseek-v4-pro",
+      "role": "judge",
+      "scope": [
+        "delivery"
+      ],
+      "timeout_sec": 120
+    },
+    {
+      "cli": "hermes",
+      "id": "gpt55-reviewer",
+      "invoke": [
+        "hermes",
+        "chat",
+        "-q"
+      ],
+      "local": false,
+      "model": "gpt-5.5",
+      "role": "reviewer",
+      "scope": [
+        "plan",
+        "delivery"
+      ],
+      "timeout_sec": 120
+    },
+    {
+      "cli": "hermes",
+      "id": "glm52-reviewer",
+      "invoke": [
+        "hermes",
+        "chat",
+        "--provider",
+        "openrouter",
+        "-m",
+        "z-ai/glm-5.2",
+        "-q"
+      ],
+      "local": false,
+      "model": "z-ai/glm-5.2",
+      "role": "reviewer",
+      "scope": [
+        "delivery"
+      ],
+      "timeout_sec": 180
+    }
+  ],
+  "council_by_id": {
+    "deepseek-judge": {
+      "cli": "hermes",
+      "id": "deepseek-judge",
+      "invoke": [
+        "hermes",
+        "chat",
+        "--provider",
+        "deepseek",
+        "-m",
+        "deepseek-v4-pro",
+        "-q"
+      ],
+      "local": false,
+      "model": "deepseek-v4-pro",
+      "role": "judge",
+      "scope": [
+        "delivery"
+      ],
+      "timeout_sec": 120
+    },
+    "glm52-reviewer": {
+      "cli": "hermes",
+      "id": "glm52-reviewer",
+      "invoke": [
+        "hermes",
+        "chat",
+        "--provider",
+        "openrouter",
+        "-m",
+        "z-ai/glm-5.2",
+        "-q"
+      ],
+      "local": false,
+      "model": "z-ai/glm-5.2",
+      "role": "reviewer",
+      "scope": [
+        "delivery"
+      ],
+      "timeout_sec": 180
+    },
+    "gpt55-reviewer": {
+      "cli": "hermes",
+      "id": "gpt55-reviewer",
+      "invoke": [
+        "hermes",
+        "chat",
+        "-q"
+      ],
+      "local": false,
+      "model": "gpt-5.5",
+      "role": "reviewer",
+      "scope": [
+        "plan",
+        "delivery"
+      ],
+      "timeout_sec": 120
+    }
+  },
+  "criteria_by_id": {
+    "all-issues-closed": {
+      "check": [
+        "bash",
+        "-c",
+        "test -z \"$(gh issue list --repo ksimback/lossless-compaction --state open --json number -q '.[].number')\""
+      ],
+      "expect": "exit_zero",
+      "id": "all-issues-closed",
+      "type": "programmatic"
+    },
+    "human-final-review": {
+      "id": "human-final-review",
+      "prompt": "All PRs have been implemented, reviewed, and merged. Please spot-check 2-3 closed issues and their linked PRs to confirm the fixes are sound. Type 'pass' to accept the run, or describe what needs revision.\n",
+      "type": "human"
+    },
+    "pr-quality": {
+      "id": "pr-quality",
+      "rubric": "Each merged PR in this round: (a) references the issue it closes, (b) makes a focused change that directly addresses the issue description, (c) does not introduce new test failures (check for test file changes alongside code changes), and (d) has a coherent commit message. Flag any PR where the change is unrelated to the issue or where core logic was removed rather than fixed.\n",
+      "type": "judge"
+    }
+  },
+  "execution": {
+    "isolation": "worktree",
+    "mode": "in_session",
+    "side_effects": {
+      "duplicate_action_check": true,
+      "requires_approval": true,
+      "side_effect_list": [
+        "git push (creates remote branch per issue)",
+        "gh pr create (files PR per issue)",
+        "gh pr merge (merges approved PRs)",
+        "gh pr comment (posts review notes)",
+        "gh issue close (closes issue on merge)"
+      ]
+    }
+  },
+  "gates": {
+    "delivery_gate": {
+      "criteria": [
+        "all-issues-closed",
+        "pr-quality"
+      ],
+      "max_revisions": 3,
+      "members": [
+        "deepseek-judge",
+        "gpt55-reviewer",
+        "glm52-reviewer"
+      ],
+      "verdict_policy": "revise_until_clean",
+      "verdict_source": "deepseek-judge",
+      "when": "after_each_delivery"
+    },
+    "plan_gate": {
+      "criteria": [
+        "pr-quality"
+      ],
+      "max_revisions": 2,
+      "members": [
+        "gpt55-reviewer"
+      ],
+      "verdict_policy": "revise_until_clean",
+      "verdict_source": "human",
+      "when": "after_plan"
+    }
+  },
+  "goal": {
+    "context_sources": [
+      {
+        "cmd": [
+          "gh",
+          "issue",
+          "list",
+          "--repo",
+          "ksimback/lossless-compaction",
+          "--state",
+          "open",
+          "--json",
+          "number,title,body"
+        ],
+        "timeout_sec": 30
+      },
+      {
+        "cmd": [
+          "gh",
+          "pr",
+          "list",
+          "--repo",
+          "ksimback/lossless-compaction",
+          "--state",
+          "open",
+          "--json",
+          "number,title,headRefName,reviewDecision"
+        ],
+        "timeout_sec": 30
+      },
+      {
+        "cmd": [
+          "git",
+          "log",
+          "--oneline",
+          "-20"
+        ],
+        "timeout_sec": 15
+      }
+    ],
+    "definition_of_done": "All open GitHub issues are closed (gh issue list returns empty) OR three implement-review-fix rounds have elapsed. Each closed issue has a merged PR. run-log.md records each round's implement/review/merge/fix decisions. state.json shows status: passed.\n",
+    "statement": "Close all open GitHub issues in a target repository by: (1) reading each open issue, (2) spawning a parallel Claude agent per issue to implement the fix in an isolated git worktree and file a PR, (3) reviewing each PR with a cross-model judge (DeepSeek or GLM-5.2), (4) auto-merging approved PRs, and (5) spawning fix agents for blocked PRs and re-reviewing. The loop ends when all issues are closed or three fix rounds have elapsed.\n",
+    "verification": [
+      {
+        "check": [
+          "bash",
+          "-c",
+          "test -z \"$(gh issue list --repo ksimback/lossless-compaction --state open --json number -q '.[].number')\""
+        ],
+        "expect": "exit_zero",
+        "id": "all-issues-closed",
+        "type": "programmatic"
+      },
+      {
+        "id": "pr-quality",
+        "rubric": "Each merged PR in this round: (a) references the issue it closes, (b) makes a focused change that directly addresses the issue description, (c) does not introduce new test failures (check for test file changes alongside code changes), and (d) has a coherent commit message. Flag any PR where the change is unrelated to the issue or where core logic was removed rather than fixed.\n",
+        "type": "judge"
+      },
+      {
+        "id": "human-final-review",
+        "prompt": "All PRs have been implemented, reviewed, and merged. Please spot-check 2-3 closed issues and their linked PRs to confirm the fixes are sound. Type 'pass' to accept the run, or describe what needs revision.\n",
+        "type": "human"
+      }
+    ]
+  },
+  "host": {
+    "cli": "claude",
+    "invoke": [
+      "claude",
+      "-p"
+    ],
+    "model": "claude-sonnet-4-6",
+    "timeout_sec": 600
+  },
+  "loop_control": {
+    "budget": {
+      "tokens": 4000000,
+      "usd": 10.0,
+      "wall_clock_min": 60
+    },
+    "human_checkpoints": [
+      "after_plan"
+    ],
+    "max_iterations": 9,
+    "no_progress": {
+      "action": "stop",
+      "max_stalled_iterations": 2,
+      "signals": [
+        "open issue count unchanged between rounds",
+        "same PR blocked by same review note twice",
+        "worktree agent exits without producing a commit"
+      ]
+    },
+    "stop_conditions": [
+      "all-issues-closed criterion passes (gh issue list empty)",
+      "max_iterations reached",
+      "no_progress detected for 2 consecutive rounds",
+      "any budget cap exceeded"
+    ]
+  },
+  "meta": {
+    "author": "ksimback",
+    "created": "2026-06-19",
+    "description": "Fan-out multi-model code review \u2192 parallel worktree implement \u2192 cross-model PR review \u2192 auto-merge or fix loop. Used to close all open issues in a GitHub repo using an implementer-verifier-fixer agent pattern with cross-vendor judges.\n",
+    "name": "multi-model-issue-close"
+  },
+  "observability": {
+    "checkpoint_granularity": "gate",
+    "run_log": "run-log.md",
+    "state_file": "state.json"
+  },
+  "privacy": {
+    "egress": [
+      {
+        "consent": "required",
+        "redact": [
+          ".env",
+          ".env.*",
+          "secrets/**",
+          "**/*.key",
+          "~/.env"
+        ],
+        "sends": [
+          "plan",
+          "deliveries",
+          "issue-descriptions",
+          "code-diffs"
+        ],
+        "to": "deepseek-judge"
+      },
+      {
+        "consent": "required",
+        "redact": [
+          ".env",
+          ".env.*",
+          "secrets/**",
+          "**/*.key",
+          "~/.env"
+        ],
+        "sends": [
+          "plan",
+          "deliveries",
+          "issue-descriptions"
+        ],
+        "to": "gpt55-reviewer"
+      },
+      {
+        "consent": "required",
+        "redact": [
+          ".env",
+          ".env.*",
+          "secrets/**",
+          "**/*.key",
+          "~/.env"
+        ],
+        "sends": [
+          "deliveries",
+          "code-diffs"
+        ],
+        "to": "glm52-reviewer"
+      }
+    ]
+  },
+  "source": "/home/ec2-user/lossless-compaction/looper-output/loop.yaml",
+  "version": 1,
+  "workspace": {
+    "dir": "./loop-workspace",
+    "layout": [
+      "plan.md",
+      "delivery-{n}.md",
+      "review-{n}.md",
+      "state.json",
+      "run-log.md"
+    ]
+  }
+}
