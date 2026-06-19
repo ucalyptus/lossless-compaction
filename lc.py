@@ -61,6 +61,19 @@ def _validate_turn(role: str, content: str) -> None:
         raise ValueError("content exceeds 1MB limit.")
 
 
+_VALID_ROLES = {"user", "assistant", "system"}
+_SCHEMA_VERSION = 1
+
+
+def _validate_turn(role: str, content: str) -> None:
+    if role not in _VALID_ROLES:
+        raise ValueError(f"Invalid role {role!r}. Must be one of {_VALID_ROLES}.")
+    if not content or not content.strip():
+        raise ValueError("content must not be empty.")
+    if len(content) > 1_000_000:
+        raise ValueError("content exceeds 1MB limit.")
+
+
 # ── index ──────────────────────────────────────────────────────────────────
 def index_append(role: str, content: str) -> int:
     _validate_turn(role, content)
