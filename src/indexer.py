@@ -5,6 +5,7 @@ Each turn: {turn_id, role, content, timestamp, metadata}.
 import json
 import time
 from pathlib import Path
+from typing import Optional
 
 
 class ConversationIndexer:
@@ -12,7 +13,7 @@ class ConversationIndexer:
         self.path = Path(index_path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
-    def append(self, role: str, content: str, metadata: dict | None = None):
+    def append(self, role: str, content: str, metadata: Optional[dict] = None):
         record = {
             "turn_id": int(time.time() * 1000),
             "role": role,
