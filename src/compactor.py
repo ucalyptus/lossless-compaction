@@ -3,7 +3,7 @@ Produces a structured compacted state from a conversation.
 Compacted state carries: objective, plan/todo, constraints, decisions.
 It is intentionally lossy — the retrieval layer handles the rest.
 """
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, fields, asdict
 from typing import Any
 import json
 
@@ -38,10 +38,15 @@ class CompactedState:
         return "\n\n".join(parts)
 
     def save(self, path: str):
+        data = asdict(self)
+        data["schema_version"] = 1
         with open(path, "w") as f:
-            json.dump(asdict(self), f, indent=2)
+            json.dump(data, f, indent=2)
 
     @classmethod
     def load(cls, path: str) -> "CompactedState":
         with open(path) as f:
-            return cls(**json.load(f))
+            data = json.load(f)
+        data.pop("schema_version", None)
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in data.items() if k in known})
