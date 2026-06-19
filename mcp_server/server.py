@@ -41,7 +41,17 @@ def _index_append(role: str, content: str) -> None:
 def _index_load() -> list[dict]:
     if not INDEX_PATH.exists():
         return []
-    return [json.loads(l) for l in INDEX_PATH.read_text().splitlines() if l.strip()]
+    turns = []
+    with INDEX_PATH.open() as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                turns.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return turns
 
 _STOP_WORDS = {
     "a","an","the","is","it","in","of","to","for","and","or","we","i","you",
@@ -53,19 +63,28 @@ _STOP_WORDS = {
 }
 
 def _retrieve(question: str, top_k: int = 5) -> list[dict]:
-    turns = _index_load()
+    if not INDEX_PATH.exists():
+        return []
     raw_kw = set(question.lower().split())
     keywords = raw_kw - _STOP_WORDS
     if not keywords:
         keywords = raw_kw  # fallback: use all tokens if everything is a stop word
     scored = []
-    for turn in turns:
-        score = sum(1 for kw in keywords if kw in turn["content"].lower())
-        if score > 0:
-            # ponytail: user turns get a small boost — binding facts come from users
-            if turn.get("role") == "user":
-                score += 0.1
-            scored.append((score, turn))
+    with INDEX_PATH.open() as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                turn = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            score = sum(1 for kw in keywords if kw in turn["content"].lower())
+            if score > 0:
+                # ponytail: user turns get a small boost — binding facts come from users
+                if turn.get("role") == "user":
+                    score += 0.1
+                scored.append((score, turn))
     scored.sort(key=lambda x: -x[0])
     return [t for _, t in scored[:top_k]]
 
