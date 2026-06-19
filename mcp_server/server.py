@@ -26,8 +26,13 @@ BASE_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── inline compactor / indexer / retriever (no relative imports needed) ────
 
+_VALID_ROLES = {"user", "assistant", "system"}
+_SCHEMA_VERSION = 1
+
+
 def _index_append(role: str, content: str) -> None:
-    record = {"turn_id": int(time.time() * 1000), "role": role,
+    record = {"schema_version": _SCHEMA_VERSION,
+              "turn_id": int(time.time() * 1000), "role": role,
               "content": content, "ts": time.time()}
     with INDEX_PATH.open("a") as f:
         f.write(json.dumps(record) + "\n")
@@ -211,6 +216,12 @@ def handle_tool(name: str, args: dict) -> Any:
     if name == "index_turn":
         role = args.get("role", "user")
         content = args.get("content", "")
+        if role not in _VALID_ROLES:
+            raise ValueError(f"Invalid role {role!r}. Must be one of {_VALID_ROLES}.")
+        if not content or not content.strip():
+            raise ValueError("content must not be empty.")
+        if len(content) > 1_000_000:
+            raise ValueError("content exceeds 1MB limit.")
         _index_append(role, content)
         turns = _index_load()
         return f"Indexed. Total turns in history: {len(turns)}."

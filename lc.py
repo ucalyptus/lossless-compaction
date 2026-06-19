@@ -20,10 +20,25 @@ INDEX = BASE / "index.jsonl"
 STATE = BASE / "state.json"
 BASE.mkdir(parents=True, exist_ok=True)
 
+_VALID_ROLES = {"user", "assistant", "system"}
+_SCHEMA_VERSION = 1
+
+
+def _validate_turn(role: str, content: str) -> None:
+    if role not in _VALID_ROLES:
+        raise ValueError(f"Invalid role {role!r}. Must be one of {_VALID_ROLES}.")
+    if not content or not content.strip():
+        raise ValueError("content must not be empty.")
+    if len(content) > 1_000_000:
+        raise ValueError("content exceeds 1MB limit.")
+
+
 # ── index ──────────────────────────────────────────────────────────────────
 def index_append(role: str, content: str) -> int:
+    _validate_turn(role, content)
     with INDEX.open("a") as f:
-        f.write(json.dumps({"turn_id": int(time.time()*1000), "role": role,
+        f.write(json.dumps({"schema_version": _SCHEMA_VERSION,
+                            "turn_id": int(time.time()*1000), "role": role,
                             "content": content, "ts": time.time()}) + "\n")
     return sum(1 for _ in INDEX.read_text().splitlines() if _.strip())
 
