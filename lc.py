@@ -8,7 +8,7 @@ Usage:
   lc state                    — print current compacted state
   lc stats                    — print index stats
 """
-import json, os, sys, time
+import json, os, sys, tempfile, time
 from pathlib import Path
 from typing import Optional
 
@@ -26,7 +26,15 @@ def index_append(role: str, content: str) -> int:
 
 def index_load() -> list[dict]:
     if not INDEX.exists(): return []
-    return [json.loads(l) for l in INDEX.read_text().splitlines() if l.strip()]
+    turns = []
+    for lineno, line in enumerate(INDEX.read_text().splitlines(), 1):
+        line = line.strip()
+        if not line: continue
+        try:
+            turns.append(json.loads(line))
+        except json.JSONDecodeError as e:
+            print(f"[warn] skipping malformed turn at line {lineno}: {e}", file=sys.stderr)
+    return turns
 
 # ── retriever ──────────────────────────────────────────────────────────────
 def retrieve(question: str, top_k: int = 5) -> list[dict]:
@@ -59,7 +67,17 @@ def load_state() -> dict:
     return {"objective":"","plan":[],"constraints":[],"decisions":[],
             "rejected_approaches":[],"active_preferences":[],"source_index":""}
 
-def save_state(s: dict): STATE.write_text(json.dumps(s, indent=2))
+def save_state(s: dict):
+    data = json.dumps(s, indent=2)
+    fd, tmp = tempfile.mkstemp(dir=BASE, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(data)
+        os.replace(tmp, STATE)
+    except:
+        try: os.unlink(tmp)
+        except: pass
+        raise
 
 def compact(objective: str = "") -> str:
     s = load_state()
