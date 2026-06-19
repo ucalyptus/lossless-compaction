@@ -28,20 +28,27 @@ class ConversationRetriever:
         """
         if not self.path.exists():
             return []
-        turns = [json.loads(l) for l in self.path.read_text().splitlines() if l.strip()]
         raw_kw = set(question.lower().split())
         keywords = raw_kw - _STOP_WORDS
         if not keywords:
             keywords = raw_kw  # fallback: use all tokens if everything is a stop word
         scored = []
-        for turn in turns:
-            content = turn["content"].lower()
-            score = sum(1 for kw in keywords if kw in content)
-            if score > 0:
-                # ponytail: user turns get a small boost — binding facts come from users
-                if turn.get("role") == "user":
-                    score += 0.1
-                scored.append((score, turn))
+        with self.path.open() as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    turn = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                content = turn["content"].lower()
+                score = sum(1 for kw in keywords if kw in content)
+                if score > 0:
+                    # ponytail: user turns get a small boost — binding facts come from users
+                    if turn.get("role") == "user":
+                        score += 0.1
+                    scored.append((score, turn))
         scored.sort(key=lambda x: -x[0])
         return [t for _, t in scored[:top_k]]
 

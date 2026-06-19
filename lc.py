@@ -171,7 +171,7 @@ def load_state() -> dict:
 
 def save_state(s: dict):
     data = json.dumps(s, indent=2)
-    fd, tmp = tempfile.mkstemp(dir=BASE, suffix=".tmp")
+    fd, tmp = tempfile.mkstemp(dir=_PROJECT_DIR, suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as f:
             f.write(data)
@@ -183,41 +183,79 @@ def save_state(s: dict):
 
 def compact(objective: str = "") -> str:
     s = load_state()
-    seen_r = {x.lower().strip() for x in s["rejected_approaches"]}
-    seen_c = {x.lower().strip() for x in s["constraints"]}
-    seen_p = {x.lower().strip() for x in s["active_preferences"]}
+    # Use list of [ts, content] for ordering — stored as lists for JSON serialization
+    # Existing entries: backfill ts=0 if missing
+    def _entries_with_ts(existing: list) -> list:
+        result = []
+        for item in existing:
+            if isinstance(item, list) and len(item) == 2:
+                result.append(item)
+            else:
+                result.append([0, item])
+        return result
+
+    rej_entries = _entries_with_ts(s["rejected_approaches"])
+    con_entries = _entries_with_ts(s["constraints"])
+    pre_entries = _entries_with_ts(s["active_preferences"])
+
+    seen_r = {e[1].lower().strip() for e in rej_entries}
+    seen_c = {e[1].lower().strip() for e in con_entries}
+    seen_p = {e[1].lower().strip() for e in pre_entries}
+
     for turn in index_load():
         # ponytail: only user turns set binding constraints/preferences
         if turn.get("role") != "user":
             continue
+        ts = turn.get("ts", 0)
         for raw in turn["content"].splitlines():
             line = raw.strip()
             # skip very short lines — likely code or incidental mentions
             if len(line) < 25:
                 continue
             # skip obvious code/shell output lines
-            lo = line.lower()
             if line.startswith(("#", "$", ">", "```")) or "://" in line:
                 continue
-            b, key = _classify(line), lo
+            b, key = _classify(line), line.lower()
             if b == "rejected" and key not in seen_r:
-                s["rejected_approaches"].append(line); seen_r.add(key)
+                rej_entries.append([ts, line]); seen_r.add(key)
             elif b == "constraint" and key not in seen_c:
-                s["constraints"].append(line); seen_c.add(key)
+                con_entries.append([ts, line]); seen_c.add(key)
             elif b == "preference" and key not in seen_p:
-                s["active_preferences"].append(line); seen_p.add(key)
+                pre_entries.append([ts, line]); seen_p.add(key)
+
+    # Sort by timestamp — oldest first, newest last (LLM sees most recent last)
+    rej_entries.sort(key=lambda x: x[0])
+    con_entries.sort(key=lambda x: x[0])
+    pre_entries.sort(key=lambda x: x[0])
+
+    s["rejected_approaches"] = rej_entries
+    s["constraints"] = con_entries
+    s["active_preferences"] = pre_entries
     if objective: s["objective"] = objective
     s["source_index"] = str(INDEX)
     save_state(s)
     return render_state(s)
 
 def render_state(s: dict) -> str:
+    def _extract_content(items: list) -> list:
+        """Handle both legacy strings and new [ts, content] tuples."""
+        result = []
+        for item in items:
+            if isinstance(item, list) and len(item) == 2:
+                result.append(item[1])
+            else:
+                result.append(str(item))
+        return result
+
     parts = []
     if s["objective"]: parts.append(f"## Objective\n{s['objective']}")
     if s["plan"]: parts.append("## Plan\n" + "\n".join(f"- {p}" for p in s["plan"]))
-    if s["constraints"]: parts.append("## Constraints\n" + "\n".join(f"- {c}" for c in s["constraints"]))
-    if s["rejected_approaches"]: parts.append("## Rejected Approaches\n" + "\n".join(f"- {r}" for r in s["rejected_approaches"]))
-    if s["active_preferences"]: parts.append("## Preferences\n" + "\n".join(f"- {p}" for p in s["active_preferences"]))
+    constraints = _extract_content(s["constraints"])
+    if constraints: parts.append("## Constraints\n" + "\n".join(f"- {c}" for c in constraints))
+    rejected = _extract_content(s["rejected_approaches"])
+    if rejected: parts.append("## Rejected Approaches\n" + "\n".join(f"- {r}" for r in rejected))
+    preferences = _extract_content(s["active_preferences"])
+    if preferences: parts.append("## Preferences\n" + "\n".join(f"- {p}" for p in preferences))
     if s["source_index"]: parts.append(f"> Index: {s['source_index']}\n> Run `lc query <question>` to recover context not carried here.")
     return "\n\n".join(parts) if parts else "(no compacted state yet — run `lc compact`)"
 
@@ -261,6 +299,7 @@ def main():
         roles = {}
         for t in turns: roles[t["role"]] = roles.get(t["role"], 0) + 1
         s = load_state()
+        print(f"project:  {_PROJECT}")
         print(f"index:    {len(turns)} turns  ({', '.join(f'{k}:{v}' for k,v in roles.items())})")
         print(f"index at: {INDEX}")
         print(f"rejected: {len(s['rejected_approaches'])}")
